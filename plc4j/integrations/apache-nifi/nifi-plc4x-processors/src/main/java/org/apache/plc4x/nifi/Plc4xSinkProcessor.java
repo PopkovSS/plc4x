@@ -17,7 +17,7 @@
  * under the License.
  */
 package org.apache.plc4x.nifi;
-
+import java.util.Map;
 import org.apache.nifi.annotation.behavior.InputRequirement;
 import org.apache.nifi.annotation.behavior.ReadsAttribute;
 import org.apache.nifi.annotation.behavior.ReadsAttributes;
@@ -27,10 +27,14 @@ import org.apache.nifi.annotation.documentation.Tags;
 import org.apache.nifi.flowfile.FlowFile;
 import org.apache.nifi.processor.ProcessContext;
 import org.apache.nifi.processor.ProcessSession;
+import org.apache.nifi.processor.ProcessorInitializationContext;
 import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.plc4x.java.api.PlcConnection;
+import org.apache.plc4x.java.api.PlcDriver;
+import org.apache.plc4x.java.api.exceptions.PlcConnectionException;
 import org.apache.plc4x.java.api.messages.PlcWriteRequest;
 import org.apache.plc4x.java.api.messages.PlcWriteResponse;
+import org.apache.plc4x.java.api.model.PlcField;
 
 @TriggerSerially
 @Tags({"plc4x-sink"})
@@ -38,11 +42,13 @@ import org.apache.plc4x.java.api.messages.PlcWriteResponse;
 @CapabilityDescription("Processor able to write data to industrial PLCs using Apache PLC4X")
 @ReadsAttributes({@ReadsAttribute(attribute="value", description="some value")})
 public class Plc4xSinkProcessor extends BasePlc4xProcessor {
-
+    
+    
+    
     @Override
     public void onTrigger(final ProcessContext context, final ProcessSession session) throws ProcessException {
         FlowFile flowFile = session.get();
-
+	
         // Abort if there's nothing to do.
         if (flowFile == null) {
             return;
@@ -53,18 +59,33 @@ public class Plc4xSinkProcessor extends BasePlc4xProcessor {
             if (!connection.getMetadata().canWrite()) {
                 throw new ProcessException("Writing not supported by connection");
             }
-
+            PlcDriver driver = getDriverManager().getDriverForUrl(getConnectionString());
+            //PlcField fieldType = driver.prepareField(address);
             // Prepare the request.
             PlcWriteRequest.Builder builder = connection.writeRequestBuilder();
+            
             flowFile.getAttributes().forEach((field, value) -> {
                 String address = getAddress(field);
                 if (address != null) {
                     // TODO: Convert the String into the right type ...
-                    builder.addItem(field, address, Boolean.valueOf(value));
+                    PlcField fieldType = driver.prepareField(address);
+                    String dataType = fieldType.getDefaultJavaType().getSimpleName();
+                    switch (dataType) {
+                        case ("Integer"):
+                            builder.addItem(field, address, Integer.valueOf(value));
+                            break;
+                        case ("Double"):
+                            builder.addItem(field, address, Double.valueOf(value));
+                            break;
+                        case ("Boolean"):
+                            builder.addItem(field, address, Boolean.valueOf(value));
+                            break;
+                    }
+                    
                 }
             });
+            
             PlcWriteRequest writeRequest = builder.build();
-
             // Send the request to the PLC.
             try {
                 final PlcWriteResponse plcWriteResponse = writeRequest.execute().get();
@@ -74,11 +95,17 @@ public class Plc4xSinkProcessor extends BasePlc4xProcessor {
                 flowFile = session.putAttribute(flowFile, "exception", e.getLocalizedMessage());
                 session.transfer(flowFile, FAILURE);
             }
-        } catch (ProcessException e) {
+        } 
+        catch (ProcessException e) {
             throw e;
-        } catch (Exception e) {
-            throw new ProcessException("Got an error while trying to get a connection", e);
+            
         }
+        catch (PlcConnectionException e) {
+            throw new ProcessException("Got an error while trying to get a driver", e);
+        } 
+        catch (Exception e) {
+            throw new ProcessException("Got an error while trying to get a connection", e);
+        } 
     }
 
 }
